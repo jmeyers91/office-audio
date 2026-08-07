@@ -259,7 +259,7 @@ normal and by design. A typical log looks like:
 
 ```
 18:00:56  Voicemeeter not running, starting it
-18:01:05  A1 invalid ('Speakers (Old Sound Card)' is not an available device), repointing to 'ASUS VG247Q1A (NVIDIA High Definition Audio)' and restarting engine
+18:01:05  A1 invalid ('Speakers (Old Sound Card)' is not an available device), repointing to 'Display Audio (NVIDIA High Definition Audio)' and restarting engine
 18:01:20  did not take: ip, port, sr, route, on, enable, strip.B2
 18:01:30  OK - 'HubOutput' -> 192.0.2.10:6980 sr=44100 route=4
 ```

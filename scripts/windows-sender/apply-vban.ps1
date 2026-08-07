@@ -63,7 +63,7 @@ $BusIndex = 4
 # A monitor's HDMI output is a good throwaway choice.
 #
 # Use the name WITHOUT any "WDM:" prefix, exactly as Voicemeeter reports it, for
-# example "ASUS VG247Q1A (NVIDIA High Definition Audio)". Voicemeeter's A1 menu
+# example "Display Audio (NVIDIA High Definition Audio)". Voicemeeter's A1 menu
 # displays the prefix but the API does not want it.
 #
 # Run this to print the exact strings available on this machine:
