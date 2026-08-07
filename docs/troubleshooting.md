@@ -168,6 +168,28 @@ Expected unless you did the lingering setup in
 lingering enabled, the user in the `audio` group, and config plus unit plus enable
 symlink all outside an encrypted home directory.
 
+### No sound from a powered speaker, and everything on the hub looks correct
+
+Before investigating the computer at all, check **which input the speaker is
+listening on**, not just that it is powered on with a cable in it. Powered speakers
+and soundbars commonly have aux, optical, Bluetooth and USB inputs, and selecting
+the wrong one produces exactly this: total silence, no error, and a hub that looks
+perfectly healthy end to end.
+
+This is worth ruling out first because it is free, and because the alternative is a
+long detour into codec pin maps and port priorities. "It's on and the cable is in"
+is not the same as "it is listening to that cable".
+
+Verify the hub side is doing its job with:
+
+```bash
+pw-top -b -n 4 | grep hub-       # receiver decoding?
+pactl list sinks | grep -E 'Active Port|Mute:'
+```
+
+If audio is reaching the sink and the port is unmuted, the fault is downstream of
+the computer.
+
 ### Audio plays, but out of the wrong physical output
 
 Symptom: everything arrives at the hub correctly, but comes out an internal
