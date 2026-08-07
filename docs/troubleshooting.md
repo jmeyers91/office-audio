@@ -168,6 +168,52 @@ Expected unless you did the lingering setup in
 lingering enabled, the user in the `audio` group, and config plus unit plus enable
 symlink all outside an encrypted home directory.
 
+### Audio plays, but out of the wrong physical output
+
+Symptom: everything arrives at the hub correctly, but comes out an internal
+chassis speaker or the wrong jack, and moving the cable does not help.
+
+This is port selection, not routing. Check which port the sink is using:
+
+```bash
+pactl list sinks | sed -n '/Name: YOUR_SINK_NAME/,/^Sink #/p' | grep -E 'Active Port|analog-output-'
+```
+
+If the port you want says **not available** even with a cable in it, jack
+detection on that board is unreliable. PipeWire then falls back to the highest
+priority port it thinks is usable, and an internal speaker typically outranks line
+out (priority 10000 against 9000).
+
+Force it:
+
+```bash
+pactl set-sink-port YOUR_SINK_NAME analog-output-lineout
+```
+
+**Restart the hub afterwards.** Changing a sink's port after the receivers have
+linked kills the `vban-recv` streams permanently. They vanish from the graph rather
+than reconnecting, and the service starts burning CPU spinning on the dead modules.
+Roc receivers survive it.
+
+```bash
+systemctl --user restart pipewire-audio-hub
+pw-link -l | grep -A1 '^hub-'     # confirm all receivers came back
+```
+
+That fix is runtime only. To make it survive a reboot, especially on an encrypted
+home where the session manager cannot read its saved state before login, see
+[`force-output-port.service.example`](../scripts/linux-hub/force-output-port.service.example).
+
+### Receivers disappear from the graph
+
+If `pw-cli ls Node` shows fewer receivers than you configured, and the service is
+still "active", something reconfigured a target sink underneath them. Changing a
+sink port does this, as does a device being unplugged.
+
+`vban-recv` streams die permanently in that situation. Restarting the hub rebuilds
+them. If a receiver's `target.object` names a device that no longer exists, that
+receiver will keep failing until the device returns or you point it elsewhere.
+
 ### Audible dropouts and gaps
 
 Usually the network. Check the hub is on wired ethernet.

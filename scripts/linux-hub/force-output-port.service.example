@@ -1,0 +1,41 @@
+[Unit]
+Description=Force a sink to a specific output port before the hub starts
+#
+# OPTIONAL. You only need this if your machine picks the wrong physical output,
+# for example playing through an internal chassis speaker when you have
+# something plugged into line out.
+#
+# Cause: unreliable jack detection. If the port you want reports "not available"
+# in `pactl list sinks`, PipeWire falls back to the highest-priority port it
+# believes is usable, and an internal speaker usually outranks line out.
+#
+# Why this cannot just be a one-off `pactl set-sink-port`: the session manager
+# remembers a manual port choice in ~/.local/state/wireplumber, which is
+# unreadable at boot before login if the home directory is encrypted. Asserting
+# it from /etc works regardless.
+#
+# Why it is ordered BEFORE the hub: changing a sink's port after the receivers
+# have linked KILLS the vban-recv streams. They do not reconnect, they simply
+# vanish from the graph, and the service then burns CPU spinning on the dead
+# modules. Roc receivers survive it. Setting the port first avoids the problem
+# entirely. If you ever change a port by hand, restart the hub afterwards.
+#
+# Install to /etc/systemd/user/ and enable with a symlink in
+# /etc/systemd/user/default.target.wants/ (NOT `systemctl --user enable`, which
+# writes into the home directory).
+#
+# Replace SINK_NAME  with the output from: pactl list short sinks
+# Replace PORT_NAME  with a port from:     pactl list sinks | grep -A10 Ports:
+After=pipewire.service pipewire-pulse.service wireplumber.service
+Wants=pipewire-pulse.service wireplumber.service
+Before=pipewire-audio-hub.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Polls for the sink, because wireplumber being active does not mean the device
+# node exists yet. Always exits 0, so a missing device delays nothing.
+ExecStart=/usr/bin/bash -c 'for i in $(seq 1 30); do if pactl list short sinks | grep -q "SINK_NAME"; then pactl set-sink-port SINK_NAME PORT_NAME && echo "port set" && exit 0; fi; sleep 1; done; echo "sink never appeared, leaving port alone" >&2; exit 0'
+
+[Install]
+WantedBy=default.target
