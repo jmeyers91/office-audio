@@ -201,10 +201,16 @@ This is port selection, not routing. Check which port the sink is using:
 pactl list sinks | sed -n '/Name: YOUR_SINK_NAME/,/^Sink #/p' | grep -E 'Active Port|analog-output-'
 ```
 
-If the port you want says **not available** even with a cable in it, jack
-detection on that board is unreliable. PipeWire then falls back to the highest
-priority port it thinks is usable, and an internal speaker typically outranks line
-out (priority 10000 against 9000).
+If the port you want says **not available** even with a cable in it, reseat the
+cable first. A plug that is not fully home reports identically to a dead jack, and
+that is a much more common explanation than broken detection. When a cable is
+properly seated on a working jack, the port flips to `available` immediately and the
+session manager usually selects it on its own with no intervention.
+
+If it still says **not available** with the cable firmly seated, then detection on
+that board is genuinely unreliable. PipeWire falls back to the highest priority port
+it thinks is usable, and an internal speaker typically outranks line out (priority
+10000 against 9000).
 
 Force it:
 
