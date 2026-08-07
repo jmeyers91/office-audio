@@ -1,0 +1,191 @@
+# PipeWire client context for the office-audio hub.
+#
+# Install to /etc/pipewire/audio-hub.conf and run with:
+#   pipewire -c /etc/pipewire/audio-hub.conf
+# which is what pipewire-audio-hub.service does.
+#
+# Before editing, read docs/hub-linux.md. The three settings most likely to bite
+# you are fec.code, target.object, and the VBAN sample rate.
+#
+# ---------------------------------------------------------------------------
+# WHY A CLIENT CONTEXT AND NOT pipewire.conf.d
+#
+# Modules loaded into the PipeWire daemon context start before the session
+# manager has created any sink. The receiver streams fail with "no target node
+# available" and never retry, leaving receivers that look configured but are
+# permanently dead. Running them as a client, ordered after the session manager,
+# fixes that and also survives the output device being unplugged and replugged.
+#
+# WHY EVERY MODULE HAS nofail
+#
+# Without it, one bad option kills the whole context. PipeWire exits, systemd
+# restarts it, it fails again, and after a few rounds systemd gives up, leaving
+# the machine with no audio at all. With nofail the broken module is skipped.
+# ---------------------------------------------------------------------------
+
+context.properties = {
+    log.level = 0
+}
+
+context.spa-libs = {
+    audio.convert.* = audioconvert/libspa-audioconvert
+    support.*       = support/libspa-support
+}
+
+context.modules = [
+    # --- client scaffolding, needed for any PipeWire client context ---------
+    { name = libpipewire-module-rt   flags = [ ifexists nofail ] args = { } }
+    { name = libpipewire-module-protocol-native }
+    { name = libpipewire-module-client-node }
+    { name = libpipewire-module-adapter }
+
+    # =======================================================================
+    # DESTINATION 1: headphones
+    # =======================================================================
+
+    # Roc receiver, for macOS and Linux senders.
+    # Roc creates a session per sender automatically and mixes them, so this
+    # single instance serves every Roc sender you have.
+    { name = libpipewire-module-roc-source
+      flags = [ ifexists nofail ]
+      args = {
+        local.ip           = 0.0.0.0
+        local.source.port  = 10001
+        local.repair.port  = 10002
+        local.control.port = 10003
+
+        # MUST match the sender's source URI scheme:
+        #   disable -> sender uses rtp://        and no repair endpoint
+        #   rs8m    -> sender uses rtp+rs8m://   and a repair endpoint
+        # Many distributions build libroc without OpenFEC, in which case rs8m
+        # makes this module fail to load. Check with:
+        #   ldd /lib/*/libroc.so* | grep -i fec
+        fec.code = disable
+
+        # NOTE: on PipeWire 1.0.5 this option is "resampler.profile".
+        # Newer versions call it "roc.resampler.profile". Check
+        # "man 7 libpipewire-module-roc-source" on the machine.
+        resampler.profile = medium
+
+        sess.latency.msec = 40
+
+        source.name = "hub-headphones-roc"
+        source.props = {
+          node.name           = "hub-headphones-roc"
+          node.description    = "Headphones in (Roc)"
+          node.always-process = true
+
+          # Pin to a specific sink. Get the exact name from:
+          #   pactl list short sinks
+          # Leave this out to follow the default sink instead.
+          target.object = "REPLACE_WITH_YOUR_SINK_NAME"
+        }
+      }
+    }
+
+    # VBAN receiver, one per Windows sender.
+    #
+    # Current stable PipeWire cannot split multiple VBAN senders apart by stream
+    # name, so two senders on one port would interleave into garbage. Give each
+    # sender its own port.
+    #
+    # audio.rate MUST match what the sender transmits. This receiver uses its
+    # configured rate, NOT the rate in the VBAN packet header, so a mismatch
+    # plays at the wrong speed rather than failing loudly.
+    { name = libpipewire-module-vban-recv
+      flags = [ ifexists nofail ]
+      args = {
+        source.ip         = 0.0.0.0      # NOT 127.0.0.1, which is the default
+        source.port       = 6980
+        sess.latency.msec = 60
+        audio.rate        = 44100
+        stream.props = {
+          node.name           = "hub-headphones-vban-pc1"
+          node.description    = "Headphones in (VBAN, PC 1)"
+          node.always-process = true
+          target.object       = "REPLACE_WITH_YOUR_SINK_NAME"
+        }
+      }
+    }
+
+    # Second Windows sender. Delete if you only have one.
+    { name = libpipewire-module-vban-recv
+      flags = [ ifexists nofail ]
+      args = {
+        source.ip         = 0.0.0.0
+        source.port       = 6981
+        sess.latency.msec = 60
+        audio.rate        = 44100
+        stream.props = {
+          node.name           = "hub-headphones-vban-pc2"
+          node.description    = "Headphones in (VBAN, PC 2)"
+          node.always-process = true
+          target.object       = "REPLACE_WITH_YOUR_SINK_NAME"
+        }
+      }
+    }
+
+    # =======================================================================
+    # DESTINATION 2: speakers
+    #
+    # Delete this whole block if you only want one destination. Senders pick a
+    # destination purely by which port they aim at.
+    #
+    # If this destination is a Bluetooth speaker, note that
+    # node.always-process = true keeps the Bluetooth link fed continuously and
+    # will usually stop the speaker powering itself off. Set it to false here
+    # if that matters more to you than instant wake.
+    # =======================================================================
+
+    { name = libpipewire-module-roc-source
+      flags = [ ifexists nofail ]
+      args = {
+        local.ip           = 0.0.0.0
+        local.source.port  = 10011
+        local.repair.port  = 10012
+        local.control.port = 10013
+        fec.code           = disable
+        resampler.profile  = medium
+        sess.latency.msec  = 40
+        source.name = "hub-speakers-roc"
+        source.props = {
+          node.name           = "hub-speakers-roc"
+          node.description    = "Speakers in (Roc)"
+          node.always-process = true
+          target.object       = "REPLACE_WITH_YOUR_SECOND_SINK_NAME"
+        }
+      }
+    }
+
+    { name = libpipewire-module-vban-recv
+      flags = [ ifexists nofail ]
+      args = {
+        source.ip         = 0.0.0.0
+        source.port       = 6990
+        sess.latency.msec = 60
+        audio.rate        = 44100
+        stream.props = {
+          node.name           = "hub-speakers-vban-pc1"
+          node.description    = "Speakers in (VBAN, PC 1)"
+          node.always-process = true
+          target.object       = "REPLACE_WITH_YOUR_SECOND_SINK_NAME"
+        }
+      }
+    }
+
+    { name = libpipewire-module-vban-recv
+      flags = [ ifexists nofail ]
+      args = {
+        source.ip         = 0.0.0.0
+        source.port       = 6991
+        sess.latency.msec = 60
+        audio.rate        = 44100
+        stream.props = {
+          node.name           = "hub-speakers-vban-pc2"
+          node.description    = "Speakers in (VBAN, PC 2)"
+          node.always-process = true
+          target.object       = "REPLACE_WITH_YOUR_SECOND_SINK_NAME"
+        }
+      }
+    }
+]

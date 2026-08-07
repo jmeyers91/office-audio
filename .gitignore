@@ -1,0 +1,12 @@
+# Local copies of config with real addresses and device names in them.
+# The .example files are the ones tracked here.
+audio-hub.conf
+*.local.conf
+*.local.ps1
+
+# Logs
+*.log
+
+# OS cruft
+.DS_Store
+Thumbs.db
