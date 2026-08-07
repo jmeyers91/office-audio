@@ -126,40 +126,96 @@ Steady packets mean Windows is transmitting and the problem is on the hub side. 
 packets means Voicemeeter is not sending, and A1 (step 1) is the first thing to
 re-check. See [troubleshooting](troubleshooting.md).
 
-## 6. Autostart
+## 6. Stop closing the window from breaking everything
 
-Voicemeeter must be running for the device to work, so set it to start with
-Windows. Open the **Menu** in the top bar and set:
+Do this before you forget. By default, clicking the X on Voicemeeter's window does
+not minimise it, it **exits the application**. Two things then happen:
 
-- **Run on Windows Startup**: on
+1. The virtual device stops working, because nothing is routing it any more.
+2. Reopening Voicemeeter does **not** fix it. Voicemeeter only writes its settings
+   on a clean exit and does not reliably do so, so it comes back with defaults:
+   VBAN off, no IP, no routing, and an A1 output pointing at whatever it
+   originally guessed.
+
+Open the **Menu** in the top bar and set:
+
 - **System Tray (Close = Hide)**: on
 - **Show App On Startup**: off
 
-Together those start Voicemeeter with Windows and send it straight to the system
-tray rather than opening a window every time you log in.
+Now closing the window sends it to the tray instead of killing it, and it does not
+open a window every time you log in.
 
-Voicemeeter saves its settings when it exits cleanly. If it gets killed rather than
-closed, unsaved changes can be lost.
+## 7. Autostart and a recovery button
 
-## Optional: configure it from a script
+Voicemeeter has to be running for the device to work. There are two ways to
+arrange that, and they do not mix.
 
-If you would rather not trust the GUI and the save-on-exit behaviour, or you are
-setting up several machines, Voicemeeter ships a Remote API and this repo includes
-a script that drives it.
+### Option A: let Voicemeeter do it
 
-[`scripts/windows-sender/apply-vban.ps1`](../scripts/windows-sender/apply-vban.ps1)
-starts Voicemeeter if needed and applies the whole configuration above. Edit the
-settings block at the top, then register it to run at logon:
+Menu, then **Run on Windows Startup**: on. Simplest, but it depends on Voicemeeter
+having saved your configuration, which is the part that is not dependable.
+
+### Option B: drive it from a script
+
+This repo includes a script that applies the whole configuration through
+Voicemeeter's Remote API, so it does not matter whether Voicemeeter remembered
+anything. Edit the settings block at the top of
+[`apply-vban.ps1`](../scripts/windows-sender/apply-vban.ps1), then:
 
 ```powershell
-.\scripts\windows-sender\install-task.ps1
+.\scripts\windows-sender\install-task.ps1        # apply at every logon
+.\scripts\windows-sender\install-shortcut.ps1    # desktop recovery button
 ```
 
-That creates a scheduled task which runs the script at every logon and reapplies
-the configuration, so it does not matter whether Voicemeeter remembered anything.
-If you use this, **do not also enable Voicemeeter's own "Run on Windows Startup"**.
-Voicemeeter is single instance, so the second launch just pops the window open,
-which is the opposite of what you want. Leave the System Tray options set as above.
+The first registers a logon task. The second puts a **"Start Audio Hub"** icon on
+your desktop that you can double click any time the Windows side stops working,
+including after an accidental close. It starts Voicemeeter if needed, applies
+everything, verifies it, and shows a confirmation that dismisses itself.
+
+If you use Option B, **do not also enable Voicemeeter's own "Run on Windows
+Startup"**. Voicemeeter is single instance, so the second launch just pops the
+window open. Leave the System Tray settings from step 6 as they are.
+
+### What to expect when you run it
+
+A cold start takes roughly 30 to 45 seconds and several internal passes. That is
+normal and by design. A typical log looks like:
+
+```
+18:00:56  Voicemeeter not running, starting it
+18:01:05  A1 invalid ('Speakers (High Definition Audio Device)'), repointing and restarting engine
+18:01:20  did not take: ip, port, sr, route, on, enable, strip.B2
+18:01:30  OK - 'HubOutput' -> 192.0.2.10:6980 sr=44100 route=4
+```
+
+The third line is not an error. Writes made while the audio engine is restarting
+are silently discarded by Voicemeeter, so the runner verifies its work and goes
+around again. Only a line starting `OK -` means the configuration actually landed.
+
+Logs are at `%LOCALAPPDATA%\office-audio\apply-vban.log`.
+
+## Remote API notes
+
+Anyone extending the script should know these. All of them cost real debugging time
+to discover, and all of them fail silently.
+
+- **Drain the dirty flag before setting anything.** After `VBVMR_Login()` you must
+  poll `VBVMR_IsParametersDirty()` until it returns 0. Set calls made before that
+  return success and do nothing.
+- **Writes during an audio engine restart are discarded.** After
+  `Command.Restart`, give it well over ten seconds, and verify rather than assume.
+  Doing the restart and the configuration in one process is unreliable; a fresh
+  process per pass is not.
+- **A Set returning success proves nothing.** Always read the value back.
+- **The API only works from the interactive session.** It uses session scoped
+  shared memory, so a task set to "run whether user is logged on or not" cannot see
+  Voicemeeter at all. `VBVMR_Login()` returns 1 rather than 0 in that case.
+- **`vban.outstream[N].sr` cannot be changed while the stream is on.** Set `.on` to
+  0, change the rate, then set `.on` back to 1.
+- **`Command.Shutdown` returns success without closing the application.**
+
+The `route` parameter on an outgoing stream selects the source bus by index. For
+Banana the buses are A1, A2, A3, B1, B2, so B2 is `4`.
 
 ### Remote API notes
 

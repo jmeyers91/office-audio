@@ -16,8 +16,8 @@ param(
 $ErrorActionPreference = "Stop"
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
-$vbs  = Join-Path $here "launch.vbs"
-if (-not (Test-Path $vbs)) { throw "launch.vbs not found next to this script" }
+$vbs  = Join-Path $here "runner.vbs"
+if (-not (Test-Path $vbs)) { throw "runner.vbs not found next to this script" }
 
 $user = "$env:USERDOMAIN\$env:USERNAME"
 
@@ -48,7 +48,9 @@ Write-Host "  Start-ScheduledTask -TaskName '$TaskName'"
 Write-Host "  Get-ScheduledTaskInfo -TaskName '$TaskName' | Select LastRunTime, LastTaskResult"
 Write-Host "  Get-Content `"`$env:LOCALAPPDATA\office-audio\apply-vban.log`""
 Write-Host ""
-Write-Host "LastTaskResult of 0 means it ran. The log says what it actually applied."
+Write-Host "LastTaskResult of 0 means the task ran, NOT that the config applied."
+Write-Host "Only the log line starting 'OK -' means that. A cold start normally"
+Write-Host "takes three or four internal passes before it gets there."
 Write-Host ""
 Write-Host "Do NOT also enable Voicemeeter's own 'Run on Windows Startup'."
 Write-Host "Voicemeeter is single instance, so a second launch just opens its window."

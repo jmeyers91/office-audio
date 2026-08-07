@@ -1,18 +1,32 @@
-# office-audio: apply the Voicemeeter VBAN configuration that sends this PC's
-# "hub" output device to the Linux hub.
+# office-audio: apply the Voicemeeter VBAN configuration, ONE pass.
 #
-# Run it once by hand to configure Voicemeeter, or register it with
-# install-task.ps1 to reapply at every logon.
+# Exit codes:
+#   0  config applied and verified
+#   2  did useful work but needs another pass (started Voicemeeter, or fixed A1
+#      and restarted the audio engine, or a write was discarded). Run it again.
+#   1  something is actually wrong, see the log
 #
-# Reapplying at logon is deliberate. Voicemeeter only writes its settings on a
-# clean exit, and it does not always do so, which makes its persistence hard to
-# rely on. Reasserting the config every boot is cheap and deterministic.
+# Deliberately does one thing per run and lets the caller re-invoke. runner.vbs
+# drives the retries. An earlier version looped inside a single process and died
+# silently partway through, leaving Voicemeeter running on default settings with
+# nothing useful in the log. Writes made while the audio engine is restarting are
+# discarded, so a fresh process per pass is the only reliable approach.
 #
-# See docs/sender-windows.md for what this is doing and why.
+# Why any of this is needed at all:
+#   - Voicemeeter only saves settings on a clean exit, and closing its window
+#     kills it outright unless "System Tray (Close = Hide)" is enabled. A fresh
+#     start therefore comes up with DEFAULTS, not your configuration.
+#   - Voicemeeter will not run its audio engine unless A1 points at a device that
+#     EXISTS, and reports no error when it does not. VBAN then sends nothing.
+#   - VBVMR_IsParametersDirty() must drain to 0 after Login, or every Set is a
+#     silent no-op that still returns success.
+#   - vban.outstream[N].sr cannot be changed while the stream is on.
+#
+# See docs/sender-windows.md.
 
-# ===========================================================================
-# SETTINGS
-# ===========================================================================
+$ErrorActionPreference = "Continue"
+
+# ============================== SETTINGS ===================================
 
 # Address of the Linux hub.
 $HubIp = "192.0.2.10"
@@ -37,35 +51,21 @@ $StripIndex = 4
 # B2 is used here because it is normally unused.
 $BusIndex = 4
 
-# Voicemeeter will not run its audio engine unless A1 points at a device that
-# EXISTS. Nothing is routed to A1 here, so it only ever receives silence, but it
-# has to be valid. Set this to any real output on the machine, exactly as it
-# appears in Voicemeeter's A1 menu. A monitor's HDMI output is a fine choice.
-# Leave empty to skip the check and fix A1 by hand instead.
-$FallbackA1Device = ""
+# A real output device on this machine, named exactly as it appears in
+# Voicemeeter's A1 menu. Nothing is routed to A1, so it only ever receives
+# silence, but it has to be valid or the audio engine will not run.
+# A monitor's HDMI output is a good throwaway choice.
+$A1Device = "REPLACE WITH A REAL OUTPUT DEVICE"
 
 $VoicemeeterExe = "C:\Program Files (x86)\VB\Voicemeeter\voicemeeterpro.exe"
 $RemoteDll      = "C:\Program Files (x86)\VB\Voicemeeter\VoicemeeterRemote64.dll"
 
 # ===========================================================================
 
-$ErrorActionPreference = "Continue"
 $logDir = Join-Path $env:LOCALAPPDATA "office-audio"
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 $log = Join-Path $logDir "apply-vban.log"
-function Log($m) { "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')  $m" | Out-File -FilePath $log -Append -Encoding utf8 }
-
-Log "=== start ==="
-
-if (-not (Test-Path $VoicemeeterExe)) { Log "FATAL: Voicemeeter not found at $VoicemeeterExe"; exit 1 }
-
-if (-not (Get-Process -Name "voicemeeterpro" -ErrorAction SilentlyContinue)) {
-    Log "starting Voicemeeter"
-    Start-Process $VoicemeeterExe
-    Start-Sleep -Seconds 10
-} else {
-    Log "Voicemeeter already running"
-}
+function Log($m) { "$(Get-Date -Format 'HH:mm:ss')  $m" | Out-File -FilePath $log -Append -Encoding utf8 }
 
 $src = @"
 using System;
@@ -82,68 +82,63 @@ public static class VMR {
   [DllImport(DLL)] public static extern int VBVMR_SetParameterStringA([MarshalAs(UnmanagedType.LPStr)] string p, [MarshalAs(UnmanagedType.LPStr)] string s);
 }
 "@
-try { Add-Type -TypeDefinition $src -Language CSharp -ErrorAction Stop } catch { Log "Add-Type: $_" }
+try { Add-Type -TypeDefinition $src -Language CSharp -ErrorAction Stop } catch { }
 
-# Login returns 0 on success. It returns 1 when Voicemeeter is not reachable,
-# which most often means this script is running outside the interactive session:
-# the Remote API uses session scoped shared memory.
+function GetF($p) { $v = 0.0; [VMR]::VBVMR_GetParameterFloat($p, [ref]$v) | Out-Null; return $v }
+function GetS($p) { $sb = New-Object System.Text.StringBuilder 512; [VMR]::VBVMR_GetParameterStringA($p, $sb) | Out-Null; return $sb.ToString() }
+
+$busName = @("A1","A2","A3","B1","B2")[$BusIndex]
+
+# --- 1. Voicemeeter has to be running --------------------------------------
+if (-not (Get-Process -Name "voicemeeterpro" -ErrorAction SilentlyContinue)) {
+    if (-not (Test-Path $VoicemeeterExe)) { Log "FATAL: Voicemeeter not found at $VoicemeeterExe"; exit 1 }
+    Log "Voicemeeter not running, starting it"
+    Start-Process $VoicemeeterExe
+    exit 2
+}
+
+# --- 2. connect -------------------------------------------------------------
+# Login returns 1 when Voicemeeter cannot be reached, most often because this is
+# running outside the interactive session: the API uses session scoped shared
+# memory.
 $rc = [VMR]::VBVMR_Login()
-Log "Login rc=$rc"
-if ($rc -lt 0) { Log "FATAL: cannot reach Voicemeeter"; exit 1 }
-Start-Sleep -Milliseconds 1200
-
-# REQUIRED. Set calls made before the dirty flag drains return success and do
-# nothing at all.
-function Drain {
-    for ($i = 0; $i -lt 40; $i++) {
-        if ([VMR]::VBVMR_IsParametersDirty() -eq 0) { return $i }
-        Start-Sleep -Milliseconds 100
-    }
-    return -1
+if ($rc -lt 0) { Log "FATAL: Login rc=$rc"; exit 1 }
+Start-Sleep -Milliseconds 1500
+$drained = $false
+for ($i = 0; $i -lt 60; $i++) {
+    if ([VMR]::VBVMR_IsParametersDirty() -eq 0) { $drained = $true; break }
+    Start-Sleep -Milliseconds 100
 }
-Log "dirty drained after $(Drain) polls"
+if (-not $drained) { Log "dirty flag never drained, sets would be ignored"; exit 2 }
 
-# --- A1 has to be a device that exists or the audio engine never runs -------
-if ($FallbackA1Device -ne "") {
-    $sb = New-Object System.Text.StringBuilder 512
-    [VMR]::VBVMR_GetParameterStringA("Bus[0].device.name", $sb) | Out-Null
-    $a1 = $sb.ToString()
-    if ([string]::IsNullOrWhiteSpace($a1)) {
-        Log "A1 empty, setting to '$FallbackA1Device'"
-        [VMR]::VBVMR_SetParameterStringA("Bus[0].device.wdm", $FallbackA1Device) | Out-Null
-        Start-Sleep -Milliseconds 500
-        # hardware output changes only take effect on an engine restart
-        [VMR]::VBVMR_SetParameterFloat("Command.Restart", 1) | Out-Null
-        Start-Sleep -Seconds 6
-        Drain | Out-Null
-    } else {
-        Log "A1 = '$a1'"
-    }
+# --- 3. A1 must be real -----------------------------------------------------
+$a1 = GetS "Bus[0].device.name"
+if ([string]::IsNullOrWhiteSpace($a1)) {
+    if ($A1Device -like "REPLACE*") { Log "FATAL: A1 is empty and \$A1Device is not set"; exit 1 }
+    Log "A1 empty, setting to '$A1Device' and restarting engine"
+    [VMR]::VBVMR_SetParameterStringA("Bus[0].device.wdm", $A1Device) | Out-Null
+    Start-Sleep -Milliseconds 500
+    [VMR]::VBVMR_SetParameterFloat("Command.Restart", 1) | Out-Null
+    exit 2
 }
 
-# --- dedicate the chosen virtual input to the hub --------------------------
+# --- 4. apply ---------------------------------------------------------------
 foreach ($b in @("A1","A2","A3","B1","B2")) {
     [VMR]::VBVMR_SetParameterFloat("Strip[$StripIndex].$b", 0) | Out-Null
 }
-$busName = @("A1","A2","A3","B1","B2")[$BusIndex]
 [VMR]::VBVMR_SetParameterFloat("Strip[$StripIndex].$busName", 1) | Out-Null
 [VMR]::VBVMR_SetParameterFloat("Strip[$StripIndex].mute", 0) | Out-Null
 [VMR]::VBVMR_SetParameterFloat("Strip[$StripIndex].gain", 0) | Out-Null
 [VMR]::VBVMR_SetParameterFloat("Bus[$BusIndex].mute", 0) | Out-Null
 [VMR]::VBVMR_SetParameterFloat("Bus[$BusIndex].gain", 0) | Out-Null
 
-# --- sample rate cannot be changed while the stream is on ------------------
-$f = 0.0
-[VMR]::VBVMR_GetParameterFloat("vban.outstream[0].sr", [ref]$f) | Out-Null
-if ([int]$f -ne $SampleRate) {
-    Log "sr is $f, toggling stream off to change it"
+if ([int](GetF "vban.outstream[0].sr") -ne $SampleRate) {
     [VMR]::VBVMR_SetParameterFloat("vban.outstream[0].on", 0) | Out-Null
     Start-Sleep -Seconds 2
     [VMR]::VBVMR_SetParameterFloat("vban.outstream[0].sr", $SampleRate) | Out-Null
     Start-Sleep -Seconds 2
 }
 
-# --- the outgoing stream ---------------------------------------------------
 [VMR]::VBVMR_SetParameterStringA("vban.outstream[0].name", $StreamName) | Out-Null
 [VMR]::VBVMR_SetParameterStringA("vban.outstream[0].ip", $HubIp) | Out-Null
 [VMR]::VBVMR_SetParameterFloat("vban.outstream[0].port", $HubPort) | Out-Null
@@ -155,20 +150,22 @@ if ([int]$f -ne $SampleRate) {
 [VMR]::VBVMR_SetParameterFloat("vban.Enable", 1) | Out-Null
 Start-Sleep -Seconds 2
 
-# --- read back so the log proves what actually landed ----------------------
-$nm  = New-Object System.Text.StringBuilder 512
-$ipb = New-Object System.Text.StringBuilder 512
-[VMR]::VBVMR_GetParameterStringA("vban.outstream[0].name", $nm) | Out-Null
-[VMR]::VBVMR_GetParameterStringA("vban.outstream[0].ip", $ipb) | Out-Null
-$v = @{}
-foreach ($p in @("vban.Enable","vban.outstream[0].on","vban.outstream[0].port",
-                 "vban.outstream[0].sr","vban.outstream[0].route","Strip[$StripIndex].$busName")) {
-    [VMR]::VBVMR_GetParameterFloat($p, [ref]$f) | Out-Null
-    $v[$p] = $f
-}
-Log ("applied: name='{0}' ip='{1}' on={2} port={3} sr={4} route={5} strip->{6}={7}" -f `
-     $nm.ToString(), $ipb.ToString(), $v["vban.outstream[0].on"], $v["vban.outstream[0].port"],
-     $v["vban.outstream[0].sr"], $v["vban.outstream[0].route"], $busName, $v["Strip[$StripIndex].$busName"])
+# --- 5. verify, because a Set returning success proves nothing ---------------
+$bad = @()
+if ((GetS "vban.outstream[0].ip")             -ne $HubIp)      { $bad += "ip" }
+if ([int](GetF "vban.outstream[0].port")      -ne $HubPort)    { $bad += "port" }
+if ([int](GetF "vban.outstream[0].sr")        -ne $SampleRate) { $bad += "sr" }
+if ([int](GetF "vban.outstream[0].route")     -ne $BusIndex)   { $bad += "route" }
+if ([int](GetF "vban.outstream[0].on")        -ne 1)           { $bad += "on" }
+if ([int](GetF "vban.Enable")                 -ne 1)           { $bad += "enable" }
+if ([int](GetF "Strip[$StripIndex].$busName") -ne 1)           { $bad += "strip.$busName" }
 
+if ($bad.Count -eq 0) {
+    Log ("OK - '{0}' -> {1}:{2} sr={3} route={4}" -f $StreamName, $HubIp, $HubPort, $SampleRate, $BusIndex)
+    [VMR]::VBVMR_Logout() | Out-Null
+    exit 0
+}
+
+Log ("did not take: " + ($bad -join ", "))
 [VMR]::VBVMR_Logout() | Out-Null
-Log "=== done ==="
+exit 2

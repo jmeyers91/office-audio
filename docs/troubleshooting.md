@@ -117,6 +117,17 @@ Give each sender its own port and its own receiver instance.
 
 Roc does not have this limitation, and mixes multiple senders on one port fine.
 
+### Windows: it worked, then I closed Voicemeeter and now nothing works
+
+Closing the window exits Voicemeeter rather than minimising it, unless **System
+Tray (Close = Hide)** is enabled in its Menu. Reopening it does not help, because
+Voicemeeter only writes settings on a clean exit and does not reliably do so, so it
+restarts with defaults: VBAN off, no IP, no routing, and an A1 output that may not
+exist.
+
+Double click the **"Start Audio Hub"** desktop shortcut if you installed it, or run
+`apply-vban.ps1` again. Then enable the System Tray setting so it stops happening.
+
 ### Windows: settings do not stick
 
 If you are using the Remote API, you must poll `VBVMR_IsParametersDirty()` until it
