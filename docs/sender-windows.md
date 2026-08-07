@@ -65,6 +65,29 @@ repeat on the second and change only the port: in the VBAN dialog in step 3, or
 Roc has no such limitation, which is why Linux and macOS senders all share one port
 and only Windows needs this.
 
+## If you want more than one hub destination
+
+If the hub exposes two destinations, for example headphones and speakers, one
+Windows machine can reach both. Each destination needs its own virtual input, its
+own bus, and its own VBAN stream.
+
+Banana has two virtual inputs, which is exactly enough for two destinations:
+
+| Windows device | Voicemeeter strip | Bus | VBAN slot | Hub port |
+|---|---|---|---|---|
+| VoiceMeeter Aux Input | Strip 5 (AUX), index 4 | B2 | 0 | 6990 |
+| VoiceMeeter Input | Strip 4 (VAIO), index 3 | B1 | 1 | 6980 |
+
+Rename both in Windows and you get two ordinary output devices to switch between.
+
+Two things to watch. Each strip must feed **only** its own bus, or audio meant for
+one destination leaks into the other. And the hardware input strips default to
+routing to B1, so clear B1 on those or a connected microphone ends up in your
+headphones stream. The bundled script does both.
+
+If you need three destinations you need Voicemeeter Potato, which has a third
+virtual input.
+
 ## 1. Give A1 a real device
 
 Do this first. It is the single most common reason nothing works.

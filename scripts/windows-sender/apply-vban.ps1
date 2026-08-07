@@ -51,6 +51,13 @@ $StripIndex = 4
 # B2 is used here because it is normally unused.
 $BusIndex = 4
 
+# For a SECOND hub destination from this same machine, add a second stream on
+# the other virtual input: Strip 3 (VAIO) -> bus B1 (3) -> vban.outstream[1] ->
+# the other hub port. Each strip must feed only its own bus, and the hardware
+# input strips default to B1, so clear B1 on those or a microphone leaks into
+# that stream. See "If you want more than one hub destination" in
+# docs/sender-windows.md.
+
 # A real output device on this machine. Nothing is routed to A1, so it only ever
 # receives silence, but it has to be valid or the audio engine will not run.
 # A monitor's HDMI output is a good throwaway choice.
