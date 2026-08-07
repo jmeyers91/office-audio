@@ -230,6 +230,7 @@ moment to wake.
 
 ## Next
 
+- [Linux sender](sender-linux.md)
 - [Windows sender](sender-windows.md)
 - [macOS sender](sender-macos.md)
 - [Troubleshooting](troubleshooting.md)

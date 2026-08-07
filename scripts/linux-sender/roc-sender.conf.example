@@ -1,0 +1,71 @@
+# Roc sender: adds an output device that streams to the office-audio hub.
+#
+# Install to:
+#   ~/.config/pipewire/pipewire.conf.d/roc-sender.conf
+# then:
+#   systemctl --user restart pipewire pipewire-pulse wireplumber
+#
+# See docs/sender-linux.md.
+#
+# ---------------------------------------------------------------------------
+# WHY THIS CAN LIVE IN pipewire.conf.d WHEN THE HUB CONFIG CANNOT
+#
+# module-roc-sink creates a virtual SINK. A sink does not depend on any other
+# node already existing, so it does not hit the "no target node available"
+# failure that kills receiver modules loaded into the daemon context. Senders
+# are therefore much simpler than the hub: no client context, no systemd unit.
+#
+# KEEP THE nofail FLAG
+#
+# Without it, one bad option here takes down your entire PipeWire session
+# instead of just skipping this module, and you get no audio at all until you
+# find the mistake.
+# ---------------------------------------------------------------------------
+
+context.modules = [
+
+  # --- destination 1 --------------------------------------------------------
+  { name = libpipewire-module-roc-sink
+    flags = [ ifexists nofail ]
+    args = {
+      remote.ip           = 192.0.2.10
+      remote.source.port  = 10001
+      remote.control.port = 10003
+
+      # MUST match the hub's fec.code. Many distributions build libroc without
+      # OpenFEC, in which case this has to be "disable" and remote.repair.port
+      # must be left out entirely. Check on BOTH machines with:
+      #   ldd /lib/*/libroc.so* | grep -i fec
+      #
+      # If both ends do have FEC, set this to rs8m and uncomment the repair port.
+      fec.code = disable
+      # remote.repair.port = 10002
+
+      sink.name = "hub-headphones"
+      sink.props = {
+        node.name = "hub-headphones"
+        # This is the name you will see in your sound settings.
+        node.description = "Hub Headphones"
+      }
+    }
+  }
+
+  # --- destination 2 --------------------------------------------------------
+  # Uncomment if the hub exposes a second output. Each block becomes its own
+  # device, so you switch between them like any other output.
+  #
+  # { name = libpipewire-module-roc-sink
+  #   flags = [ ifexists nofail ]
+  #   args = {
+  #     remote.ip           = 192.0.2.10
+  #     remote.source.port  = 10011
+  #     remote.control.port = 10013
+  #     fec.code            = disable
+  #     sink.name           = "hub-speakers"
+  #     sink.props = {
+  #       node.name        = "hub-speakers"
+  #       node.description = "Hub Speakers"
+  #     }
+  #   }
+  # }
+]

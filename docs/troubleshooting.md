@@ -49,6 +49,10 @@ audio. Zeros across the board mean packets are arriving but nothing is being tur
 into sound, which usually means a protocol mismatch. See the FEC and sample rate
 sections below.
 
+Take several samples (`-n 4` rather than `-n 2`). The first reading or two are
+often captured before the stream establishes and show zeros even when everything is
+working, which is an easy way to misdiagnose a healthy sender.
+
 ### 4. Is it routed to the right sink?
 
 ```bash

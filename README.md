@@ -71,11 +71,11 @@ Since Roc has no Windows support, this is how Windows machines reach the hub.
 
 ### Which protocol goes with which sender
 
-| Sender OS | Protocol | What you install |
-|---|---|---|
-| macOS | Roc | roc-vad |
-| Linux | Roc | nothing, PipeWire has the module |
-| Windows | VBAN | Voicemeeter |
+| Sender OS | Protocol | What you install | Has to keep running |
+|---|---|---|---|
+| Linux | Roc | nothing, PipeWire has the module | no |
+| macOS | Roc | roc-vad | no |
+| Windows | VBAN | Voicemeeter | yes |
 
 The hub speaks both at the same time, so you can mix and match freely. If you have
 no Macs, ignore the Roc half. If you have no Windows machines, ignore the VBAN half.
@@ -87,13 +87,11 @@ Start with the hub, then add whichever senders you need. Each guide stands alone
 1. **[Linux hub](docs/hub-linux.md)** (required)
 2. **[Windows sender](docs/sender-windows.md)**
 3. **[macOS sender](docs/sender-macos.md)**
-4. **Linux sender** (not yet documented, see below)
+4. **[Linux sender](docs/sender-linux.md)**
 5. **[Troubleshooting](docs/troubleshooting.md)** if something is silent
 
-A Linux machine can send to the hub using PipeWire's `module-roc-sink`, which is
-the mirror image of the receiver the hub already runs. That path has not been
-built and tested yet, so it is deliberately not written up here rather than
-publishing instructions nobody has run.
+The Linux sender is the least work of the three. PipeWire already ships the module
+it needs, so there is nothing to install and nothing that has to keep running.
 
 ## Multiple destinations
 
@@ -149,6 +147,8 @@ a changed lease means silently editing every machine.
 - **Outputs**: onboard analog output and a Bluetooth speaker. A USB audio
   interface is the intended target and works the same way, since the hub just
   routes to whatever PipeWire sink you point it at.
+- **Linux sender**: a laptop running the same Linux Mint 22.3 and PipeWire 1.0.5
+  as the hub, over Wi-Fi.
 - **macOS sender**: Apple Silicon, macOS 26, roc-vad 0.0.4.
 - **Windows sender**: Windows 10 22H2, Voicemeeter Banana 2.0.6.8.
 
@@ -161,6 +161,7 @@ behaves differently.
 ```
 docs/                     setup guides, one per role
 scripts/linux-hub/        PipeWire client config and systemd unit
+scripts/linux-sender/     PipeWire sender config
 scripts/macos-sender/     roc-vad device setup
 scripts/windows-sender/   Voicemeeter VBAN config and logon task
 ```
