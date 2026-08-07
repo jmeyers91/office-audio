@@ -32,12 +32,15 @@ delay does not matter.
 ## How it works
 
 ```
-   macOS sender  ──┐  Roc / RTP
+   macOS sender  ──┐  Roc, one shared port
    Linux sender  ──┤                      ┌─────────────────┐
                    ├─────────────────────▶│   Linux hub     │──▶ headphones,
-   Windows sender──┤  VBAN / UDP          │   (PipeWire)    │    speakers, or
-   Windows sender──┘                      └─────────────────┘    USB interface
+   Windows PC 1  ──┤  VBAN, port 6980     │   (PipeWire)    │    speakers, or
+   Windows PC 2  ──┘  VBAN, port 6981     └─────────────────┘    USB interface
 ```
+
+Note the two Windows ports. Roc senders share one port and are mixed
+automatically, but each VBAN sender needs its own or they interleave into noise.
 
 The hub runs PipeWire with several network receiver modules loaded at once. Each
 receiver shows up as an ordinary audio stream, so everything mixes automatically
@@ -77,21 +80,44 @@ Since Roc has no Windows support, this is how Windows machines reach the hub.
 | macOS | Roc | roc-vad | no |
 | Windows | VBAN | Voicemeeter | yes |
 
-The hub speaks both at the same time, so you can mix and match freely. If you have
-no Macs, ignore the Roc half. If you have no Windows machines, ignore the VBAN half.
+The hub speaks both at the same time, so you can mix and match freely.
+
+Note that **Roc covers both macOS and Linux senders**. If you have no Windows
+machines you can ignore the VBAN half, and if you have no Macs *and* no Linux
+senders you can ignore the Roc half. Having no Macs on its own is not a reason to
+skip Roc.
+
+## Before you start
+
+- All machines on the same LAN, able to reach each other directly. No NAT and no
+  routing between them. This is not designed to cross networks.
+- **A fixed address for the hub**, set up before you begin. Every sender hardcodes
+  it. A DHCP reservation is fine.
+- Ability to open UDP ports on the hub if it runs a firewall.
+- The hub should be wired. Senders can be wireless.
+
+Roughly 1.4 Mbit/s per active stream at 16-bit 44.1 kHz stereo, so four senders is
+about 6 Mbit/s. Irrelevant on wired gigabit, worth knowing on congested Wi-Fi. CPU
+cost on the hub is small; a 2016 desktop handles six receivers without noticing.
 
 ## Setup
 
 Start with the hub, then add whichever senders you need. Each guide stands alone.
 
-1. **[Linux hub](docs/hub-linux.md)** (required)
-2. **[Windows sender](docs/sender-windows.md)**
+1. **[Linux hub](docs/hub-linux.md)** (required, start here)
+2. **[Linux sender](docs/sender-linux.md)** if you have one, do it next: it is the
+   quickest of the three and proves the hub works end to end before you take on
+   anything more fiddly
 3. **[macOS sender](docs/sender-macos.md)**
-4. **[Linux sender](docs/sender-linux.md)**
+4. **[Windows sender](docs/sender-windows.md)**, the most involved of the three
 5. **[Troubleshooting](docs/troubleshooting.md)** if something is silent
 
-The Linux sender is the least work of the three. PipeWire already ships the module
-it needs, so there is nothing to install and nothing that has to keep running.
+### When you are done
+
+You should be able to select the hub device on every machine, play audio on several
+at once, hear them mixed, and see each one as a separate stream with its own volume
+slider in `pavucontrol` on the hub. That last part is the payoff over a USB switch,
+and it is worth confirming deliberately rather than assuming.
 
 ## Multiple destinations
 
@@ -122,10 +148,12 @@ is what carries latency tuning and lets sender side volume work. A third port is
 used for forward error correction repair packets when FEC is enabled, which by
 default on many distributions it is not. See the hub guide.
 
-VBAN needs one port per sender per destination. This is because the PipeWire VBAN
-receiver in current stable releases cannot split multiple senders apart by stream
-name, so each sender needs its own port to avoid the streams being mixed into
-garbage. Roc has no such limitation and mixes senders on one port automatically.
+VBAN needs one port per sender per destination. **Two Windows machines must not
+share a port**, or their streams interleave into noise. This is because the
+PipeWire VBAN receiver up to and including 1.2 cannot split senders apart by stream
+name. Newer PipeWire adds `stream.rules` matching on `sess.name`, which would let
+one receiver handle several senders, but the per-port approach here works on every
+version. Roc has no such limitation and mixes senders on one port automatically.
 
 ## Network notes
 
@@ -140,6 +168,25 @@ loss rates are high. Everything in this repo uses unicast.
 Give the hub a static address or a DHCP reservation. Every sender hardcodes it, and
 a changed lease means silently editing every machine.
 
+**There is no authentication or encryption on either protocol.** Anything that can
+reach the hub's ports can play audio through your speakers. Scope your firewall
+rules to your own subnet, and do not forward these ports through a router. See the
+security section in the [hub guide](docs/hub-linux.md#security).
+
+## Living with it
+
+Once it works, per source volume is the part you will actually use day to day. Run
+`pavucontrol` on the hub and every sender appears on the Playback tab as its own
+stream with its own slider, so you can duck the noisy machine without touching the
+others. Senders keep their own local volume control as well.
+
+If the hub reboots or drops off the network, senders do not error. Roc senders
+reconnect on their own once it returns, since the endpoint is a fixed address rather
+than a session. VBAN senders simply keep transmitting into the void and resume when
+the hub is back. In both cases the sending machine stays silent rather than falling
+back to local speakers, which is worth knowing before you spend ten minutes
+wondering why a video has no sound.
+
 ## What this was tested on
 
 - **Hub**: a small x86_64 business desktop from around 2016, Linux Mint 22.3
@@ -150,7 +197,9 @@ a changed lease means silently editing every machine.
 - **Linux sender**: a laptop running the same Linux Mint 22.3 and PipeWire 1.0.5
   as the hub, over Wi-Fi.
 - **macOS sender**: Apple Silicon, macOS 26, roc-vad 0.0.4.
-- **Windows sender**: Windows 10 22H2, Voicemeeter Banana 2.0.6.8.
+- **Windows sender**: Windows 10 22H2, Voicemeeter Banana 2.0.6.8. Windows 11 is
+  untested. Nothing here is version specific and it should work unchanged, but the
+  classic Sound control panel is buried deeper, so the guide uses `mmsys.cpl`.
 
 The PipeWire version matters more than the distribution. Several module options
 were renamed or added after 1.0.5, and the guides call out where a newer PipeWire

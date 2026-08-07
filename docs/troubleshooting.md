@@ -36,12 +36,17 @@ Nothing listed means a receiver module did not load.
 journalctl --user -u pipewire-audio-hub | grep -iE 'err|fail'
 ```
 
+**If that comes back empty, check your log level before concluding there are no
+errors.** `log.level = 0` in the config disables logging entirely, including
+errors, and an empty journal then looks exactly like a clean one. The shipped
+example uses `log.level = 2`.
+
 The Roc repair port being absent is normal and expected when `fec.code = disable`.
 
 ### 3. Is the receiver decoding?
 
 ```bash
-pw-top -b -n 2 | grep -E 'hub-'
+pw-top -b -n 4 | grep -E 'hub-'
 ```
 
 A node in state `R` with a non zero rate and a real processing time is decoding
@@ -49,15 +54,19 @@ audio. Zeros across the board mean packets are arriving but nothing is being tur
 into sound, which usually means a protocol mismatch. See the FEC and sample rate
 sections below.
 
-Take several samples (`-n 4` rather than `-n 2`). The first reading or two are
+Take several samples, which is why this uses `-n 4`. The first reading or two are
 often captured before the stream establishes and show zeros even when everything is
 working, which is an easy way to misdiagnose a healthy sender.
 
 ### 4. Is it routed to the right sink?
 
 ```bash
-pw-link -l | grep -A1 receive_FL
+pw-link -l | grep -A1 '^hub-'
 ```
+
+Grep on your own `node.name` prefix rather than on port names like `receive_FL`,
+which vary between versions. If that returns nothing you cannot tell whether the
+plumbing is broken or your grep is wrong.
 
 Each receiver should be linked to the sink you expect. If it is linked to the wrong
 one, `target.object` is missing or has the wrong node name.
@@ -182,7 +191,7 @@ saving, which can produce terrible latency even with a strong signal.
 
 ```bash
 # what receivers exist and what they are doing
-pw-top -b -n 2
+pw-top -b -n 4
 
 # exact sink names for target.object
 pactl list short sinks

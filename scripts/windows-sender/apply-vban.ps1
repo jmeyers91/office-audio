@@ -51,10 +51,16 @@ $StripIndex = 4
 # B2 is used here because it is normally unused.
 $BusIndex = 4
 
-# A real output device on this machine, named exactly as it appears in
-# Voicemeeter's A1 menu. Nothing is routed to A1, so it only ever receives
-# silence, but it has to be valid or the audio engine will not run.
+# A real output device on this machine. Nothing is routed to A1, so it only ever
+# receives silence, but it has to be valid or the audio engine will not run.
 # A monitor's HDMI output is a good throwaway choice.
+#
+# Use the name WITHOUT any "WDM:" prefix, exactly as Voicemeeter reports it, for
+# example "ASUS VG247Q1A (NVIDIA High Definition Audio)". Voicemeeter's A1 menu
+# displays the prefix but the API does not want it.
+#
+# Run this to print the exact strings available on this machine:
+#   .\list-devices.ps1
 $A1Device = "REPLACE WITH A REAL OUTPUT DEVICE"
 
 $VoicemeeterExe = "C:\Program Files (x86)\VB\Voicemeeter\voicemeeterpro.exe"
@@ -66,6 +72,12 @@ $logDir = Join-Path $env:LOCALAPPDATA "office-audio"
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 $log = Join-Path $logDir "apply-vban.log"
 function Log($m) { "$(Get-Date -Format 'HH:mm:ss')  $m" | Out-File -FilePath $log -Append -Encoding utf8 }
+
+if (-not (Test-Path $RemoteDll)) {
+    Log "FATAL: VoicemeeterRemote64.dll not found at $RemoteDll"
+    Log "  If Voicemeeter is installed elsewhere, fix `$RemoteDll at the top of this script."
+    exit 1
+}
 
 $src = @"
 using System;
@@ -80,9 +92,21 @@ public static class VMR {
   [DllImport(DLL)] public static extern int VBVMR_GetParameterStringA([MarshalAs(UnmanagedType.LPStr)] string p, StringBuilder s);
   [DllImport(DLL)] public static extern int VBVMR_SetParameterFloat([MarshalAs(UnmanagedType.LPStr)] string p, float v);
   [DllImport(DLL)] public static extern int VBVMR_SetParameterStringA([MarshalAs(UnmanagedType.LPStr)] string p, [MarshalAs(UnmanagedType.LPStr)] string s);
+  [DllImport(DLL)] public static extern int VBVMR_Output_GetDeviceNumber();
+  [DllImport(DLL)] public static extern int VBVMR_Output_GetDeviceDescA(int i, ref int type, StringBuilder name, StringBuilder hwid);
 }
 "@
-try { Add-Type -TypeDefinition $src -Language CSharp -ErrorAction Stop } catch { }
+# Guard rather than swallow. An empty catch here hides a genuinely failed
+# Add-Type (wrong DLL path, 32-bit host), after which every call below fails
+# non-terminatingly and the log never mentions the real cause.
+if (-not ([System.Management.Automation.PSTypeName]'VMR').Type) {
+    try {
+        Add-Type -TypeDefinition $src -Language CSharp -ErrorAction Stop
+    } catch {
+        Log "FATAL: could not bind to VoicemeeterRemote64.dll: $_"
+        exit 1
+    }
+}
 
 function GetF($p) { $v = 0.0; [VMR]::VBVMR_GetParameterFloat($p, [ref]$v) | Out-Null; return $v }
 function GetS($p) { $sb = New-Object System.Text.StringBuilder 512; [VMR]::VBVMR_GetParameterStringA($p, $sb) | Out-Null; return $sb.ToString() }
@@ -98,11 +122,16 @@ if (-not (Get-Process -Name "voicemeeterpro" -ErrorAction SilentlyContinue)) {
 }
 
 # --- 2. connect -------------------------------------------------------------
-# Login returns 1 when Voicemeeter cannot be reached, most often because this is
-# running outside the interactive session: the API uses session scoped shared
-# memory.
 $rc = [VMR]::VBVMR_Login()
 if ($rc -lt 0) { Log "FATAL: Login rc=$rc"; exit 1 }
+if ($rc -eq 1) {
+    # Step 1 already confirmed the process is running, so rc=1 here means the
+    # API cannot see it: almost always because this is not the interactive
+    # session. Shared memory is session scoped.
+    Log "FATAL: Login rc=1, Voicemeeter is running but not visible from this session."
+    Log "  A scheduled task must be set to 'run only when user is logged on'."
+    exit 1
+}
 Start-Sleep -Milliseconds 1500
 $drained = $false
 for ($i = 0; $i -lt 60; $i++) {
@@ -111,11 +140,46 @@ for ($i = 0; $i -lt 60; $i++) {
 }
 if (-not $drained) { Log "dirty flag never drained, sets would be ignored"; exit 2 }
 
-# --- 3. A1 must be real -----------------------------------------------------
+# --- 3. A1 must point at a device that EXISTS -------------------------------
+# Checking for empty is not enough. The common real-world case is a STALE A1:
+# a device name left over from hardware that has since been removed. Voicemeeter
+# keeps showing it, refuses to run the audio engine, and reports no error, so
+# everything below would appear to succeed while transmitting nothing.
+#
+# So compare against the devices Voicemeeter can actually see right now.
+function Get-OutputDevices {
+    $list = @()
+    $n = [VMR]::VBVMR_Output_GetDeviceNumber()
+    for ($i = 0; $i -lt $n; $i++) {
+        $t = 0
+        $nm = New-Object System.Text.StringBuilder 512
+        $hw = New-Object System.Text.StringBuilder 512
+        if ([VMR]::VBVMR_Output_GetDeviceDescA($i, [ref]$t, $nm, $hw) -eq 0) {
+            $list += $nm.ToString()
+        }
+    }
+    return $list
+}
+
+$devices = Get-OutputDevices
 $a1 = GetS "Bus[0].device.name"
-if ([string]::IsNullOrWhiteSpace($a1)) {
-    if ($A1Device -like "REPLACE*") { Log "FATAL: A1 is empty and \$A1Device is not set"; exit 1 }
-    Log "A1 empty, setting to '$A1Device' and restarting engine"
+
+if ([string]::IsNullOrWhiteSpace($a1) -or ($devices -notcontains $a1)) {
+    if ($A1Device -like "REPLACE*") {
+        Log "FATAL: A1 is '$a1' which is not an available device, and `$A1Device is not set."
+        Log "  Run list-devices.ps1 and set `$A1Device to one of the names it prints."
+        exit 1
+    }
+    if ($devices -notcontains $A1Device) {
+        Log "FATAL: `$A1Device ('$A1Device') is not an available output device."
+        Log "  Run list-devices.ps1 for the exact strings. Do not include a 'WDM:' prefix."
+        exit 1
+    }
+    if ([string]::IsNullOrWhiteSpace($a1)) {
+        Log "A1 is empty, setting to '$A1Device' and restarting engine"
+    } else {
+        Log "A1 invalid ('$a1' is not an available device), repointing to '$A1Device' and restarting engine"
+    }
     [VMR]::VBVMR_SetParameterStringA("Bus[0].device.wdm", $A1Device) | Out-Null
     Start-Sleep -Milliseconds 500
     [VMR]::VBVMR_SetParameterFloat("Command.Restart", 1) | Out-Null
@@ -123,6 +187,9 @@ if ([string]::IsNullOrWhiteSpace($a1)) {
 }
 
 # --- 4. apply ---------------------------------------------------------------
+# NOTE: this unconditionally takes over VBAN outgoing stream slot 0. If you
+# already use slot 0 for something else, change every "outstream[0]" below to a
+# free slot.
 foreach ($b in @("A1","A2","A3","B1","B2")) {
     [VMR]::VBVMR_SetParameterFloat("Strip[$StripIndex].$b", 0) | Out-Null
 }

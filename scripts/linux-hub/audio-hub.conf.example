@@ -24,7 +24,10 @@
 # ---------------------------------------------------------------------------
 
 context.properties = {
-    log.level = 0
+    # 0 is silent, and silent means you get NOTHING in the journal, not even
+    # errors, which reads as "no problems" when it actually means "no output".
+    # 2 (warn) keeps the failures visible. Raise to 3 or 4 while setting up.
+    log.level = 2
 }
 
 context.spa-libs = {
@@ -128,8 +131,12 @@ context.modules = [
     # =======================================================================
     # DESTINATION 2: speakers
     #
-    # Delete this whole block if you only want one destination. Senders pick a
-    # destination purely by which port they aim at.
+    # DELETE THIS WHOLE BLOCK IF YOU ONLY WANT ONE DESTINATION. Left in with
+    # the placeholder sink name these modules still load (nofail), still bind
+    # ports 10011/10012/10013/6990/6991, and never link to anything, which
+    # makes the verification steps in the setup guide much harder to read.
+    #
+    # Senders pick a destination purely by which port they aim at.
     #
     # If this destination is a Bluetooth speaker, note that
     # node.always-process = true keeps the Bluetooth link fed continuously and

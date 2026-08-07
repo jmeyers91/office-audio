@@ -136,6 +136,16 @@ Look for the node in state `R` with a non zero rate and a real processing time.
 Sample it a few times, because the first reading or two can be taken before the
 stream establishes and will show zeros even when everything is fine.
 
+## Uninstall
+
+```bash
+rm ~/.config/pipewire/pipewire.conf.d/roc-sender.conf
+systemctl --user restart pipewire pipewire-pulse wireplumber
+```
+
+That is the whole footprint. Nothing was installed and no system files were
+touched, so the device disappears and your local outputs are unaffected.
+
 ## Next
 
 - [Troubleshooting](troubleshooting.md)

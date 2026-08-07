@@ -14,14 +14,35 @@ based system, and it calls out where newer versions differ.
 pipewire --version
 
 for m in roc-source vban-recv; do
-  ls /usr/lib/*/pipewire-0.3/libpipewire-module-$m.so >/dev/null 2>&1 \
-    && echo "ok   $m" || echo "MISSING $m"
+  so=$(ls /usr/lib/*/pipewire-0.3/libpipewire-module-$m.so 2>/dev/null | head -1)
+  if [ -z "$so" ]; then
+    echo "MISSING   $m  (module not built into this PipeWire)"
+  elif ldd "$so" 2>/dev/null | grep -q 'not found'; then
+    echo "BROKEN    $m  (missing shared library):"
+    ldd "$so" | grep 'not found' | sed 's/^/            /'
+  else
+    echo "ok        $m"
+  fi
 done
 ```
 
-Both modules ship with PipeWire on most distributions, so there is usually nothing
-to install. If `roc-source` is missing, look for a `libroc` or `roc-toolkit`
-package. If `vban-recv` is missing, your PipeWire is probably too old.
+Check the linkage, not just the file. The file existing does not mean the module
+loads. Ubuntu has shipped `libpipewire-module-roc-source.so` without `libroc`
+present, in which case the module fails and takes the whole PipeWire user service
+down with it
+([LP#2096683](https://bugs.launchpad.net/ubuntu/+source/pipewire/+bug/2096683)).
+That is exactly the failure this guide warns about hardest, so it is worth catching
+in the first minute rather than the third hour.
+
+What to do with each result:
+
+- **ok**: nothing to install.
+- **BROKEN**: install the library it names, usually something like
+  `sudo apt install libroc0.3`. Package names vary by distribution.
+- **MISSING**: your PipeWire was built without that module. Installing `libroc`
+  will not help, because the module is compiled as part of PipeWire, not shipped
+  by the Roc packages. You need a newer distribution release, a PPA with a fuller
+  PipeWire build, or a source build. There is no package that fixes this.
 
 You only need `roc-source` if you have macOS or Linux senders, and `vban-recv` only
 if you have Windows senders.
@@ -40,13 +61,19 @@ it.
 ldd /lib/*/libroc.so* 2>/dev/null | grep -i fec || echo "no openfec linked"
 ```
 
-If that prints nothing, your build has no FEC. Use `fec.code = disable` in the
-config below, and have every sender use a plain `rtp://` source address with no
-repair endpoint. The two must agree. A sender using `rtp+rs8m://` against a
-receiver with FEC disabled will produce silence and no useful error.
+If that prints nothing, your build almost certainly has no FEC. Use
+`fec.code = disable` in the config below, and have every sender use a plain
+`rtp://` source address with no repair endpoint. The two must agree. A sender using
+`rtp+rs8m://` against a receiver with FEC disabled will produce silence and no
+useful error.
 
-You can confirm after the fact: with FEC disabled, the repair port never appears in
-`ss -uln`, which is expected and not a fault.
+This check can give a false negative if OpenFEC was linked statically, which `ldd`
+cannot see. If you would rather be certain, set `fec.code = rs8m` and start the
+service. It either loads, or it logs `no codec available for fec scheme 'rs8m'` and
+refuses, which is a definitive answer. With `nofail` set that costs you nothing.
+
+You can also confirm after the fact: with FEC disabled the repair port never
+appears in `ss -uln`, which is expected and not a fault.
 
 Losing FEC only matters on lossy links. On wired ethernet it makes no practical
 difference. If you need it and your distribution does not ship it, you would have
@@ -54,9 +81,22 @@ to build roc-toolkit from source with `--build-3rdparty=openfec`.
 
 ## 3. Write the receiver config
 
-Copy [`scripts/linux-hub/audio-hub.conf.example`](../scripts/linux-hub/audio-hub.conf.example)
-to `/etc/pipewire/audio-hub.conf` and edit it. The important decisions are which
-ports to listen on and which sink each receiver feeds.
+Make a local copy inside the repo and edit **that**. It is already gitignored, so
+your addresses and device names stay out of version control. You will install it in
+step 4.
+
+```bash
+cp scripts/linux-hub/audio-hub.conf.example scripts/linux-hub/audio-hub.conf
+$EDITOR scripts/linux-hub/audio-hub.conf
+```
+
+The important decisions are which ports to listen on and which sink each receiver
+feeds.
+
+**If you only want one destination, delete the DESTINATION 2 block now.** Left in
+with its placeholder sink name, those modules still load, still bind their ports,
+and never link to anything, which makes the verification in step 5 much harder to
+read.
 
 Two things about this file are not obvious, and both cause silent failure.
 
@@ -104,16 +144,26 @@ lives in the user's home directory and may not be readable at boot. See step 6.
 PipeWire's VBAN receiver uses the sample rate from its **configuration**, not from
 the packet header. If a sender transmits 48000 and the receiver is set to 44100,
 audio plays about 8.8 percent slow, at a noticeably lower pitch. Pick one rate and
-set it on both ends. The examples here use 44100 because that is what roc-vad
-defaults to, which keeps everything consistent.
+set it on both ends.
 
-Roc negotiates properly and does not have this problem.
+The examples use **44100** because that is roc-vad's default, so a mixed setup with
+Macs in it stays consistent without extra configuration.
+
+**If you have no Macs, use 48000 instead.** Windows and Linux both run at 48000
+natively, so 44100 forces a pointless resample on every sender. Set `audio.rate =
+48000` on each `vban-recv` block and `SR` to 48000 in Voicemeeter.
+
+Roc negotiates properly and does not have this problem, so this only affects VBAN.
 
 ### A note on option names
 
-On PipeWire 1.0.5 the Roc resampler option is `resampler.profile`. Current online
-documentation shows `roc.resampler.profile`, which is a newer name. If a module
-refuses to load, check the option names against your installed version:
+On PipeWire 1.0.5 the Roc resampler option is `resampler.profile`. Newer versions
+renamed it to `roc.resampler.profile` and treat the old name as deprecated rather
+than invalid, so the shipped config keeps working either way. It is worth knowing
+the difference only so that the online documentation matching your version does not
+confuse you.
+
+In general, check option names against your installed version:
 
 ```bash
 man 7 libpipewire-module-roc-source
@@ -125,8 +175,10 @@ do not have.
 
 ## 4. Install the service
 
+Install the copy you just edited, not the example.
+
 ```bash
-sudo cp scripts/linux-hub/audio-hub.conf.example /etc/pipewire/audio-hub.conf
+sudo cp scripts/linux-hub/audio-hub.conf /etc/pipewire/audio-hub.conf
 sudo cp scripts/linux-hub/pipewire-audio-hub.service /etc/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now pipewire-audio-hub.service
@@ -144,8 +196,9 @@ journalctl --user -u pipewire-audio-hub -n 30
 Three things should be true before you try to send anything.
 
 ```bash
-# receivers exist and are linked to a sink
-pw-link -l | grep -A1 receive_FL
+# receivers exist and are linked to a sink.
+# grep on your own node.name prefix rather than on port names, which vary.
+pw-link -l | grep -A1 '^hub-'
 
 # the ports are actually bound
 ss -uln | grep -E ':(6980|6981|10001|10003) '
@@ -154,12 +207,29 @@ ss -uln | grep -E ':(6980|6981|10001|10003) '
 journalctl --user -u pipewire-audio-hub | grep -iE 'err|fail'
 ```
 
-If your firewall is active, open the UDP ports you configured.
+That last command only tells you anything if logging is on. The example config
+ships `log.level = 2`; if you set it to 0 you will get an empty journal, which
+looks identical to "no errors".
+
+If your firewall is active, open the UDP ports you configured. **Open only the
+ports you actually use**, and scope them to your LAN rather than the world. Neither
+protocol has any authentication, so anything that can reach these ports can play
+audio through your speakers.
 
 ```bash
-sudo ufw allow 10001:10003/udp
-sudo ufw allow 6980:6991/udp
+LAN=192.168.1.0/24        # your subnet
+
+# destination 1
+sudo ufw allow from $LAN to any port 10001:10003 proto udp   # Roc
+sudo ufw allow from $LAN to any port 6980:6981   proto udp   # VBAN, one per Windows PC
+
+# destination 2, only if you configured one
+sudo ufw allow from $LAN to any port 10011:10013 proto udp
+sudo ufw allow from $LAN to any port 6990:6991   proto udp
 ```
+
+Note the second Roc range. It is easy to open 10001-10003 only, then wonder why the
+second destination works over VBAN but is silent over Roc.
 
 ## 6. Make it start at boot
 
@@ -201,8 +271,40 @@ sudo ln -sf /etc/systemd/user/pipewire-audio-hub.service \
 
 Skip this if the home directory is not encrypted. The normal enable is fine.
 
-Verify by rebooting without logging in, then checking from another machine over SSH
-that the ports are bound.
+Verify by rebooting without logging in, then checking from another machine over SSH.
+Check the **links**, not just the ports:
+
+```bash
+ss -uln | grep -E ':(6980|10001) '     # necessary, not sufficient
+pw-link -l | grep -A1 '^hub-'          # this is the real test
+```
+
+The ports bind even when the receiver never linked to a sink, so a port check alone
+will happily report success on a hub that produces no sound.
+
+### If it comes up dead after a cold boot
+
+`After=wireplumber.service` orders startup but does not guarantee your sink
+**exists** by the time the receivers start. A USB audio interface enumerating during
+boot can easily lose that race, and the result is the same "no target node
+available" failure the client context design exists to avoid. `Restart=always` does
+not help, because with `nofail` the process stays alive with a dead stream.
+
+If that happens, the immediate fix is:
+
+```bash
+systemctl --user restart pipewire-audio-hub
+```
+
+To make it stick, have the unit wait for the sink before starting. Add to
+`/etc/systemd/user/pipewire-audio-hub.service`:
+
+```ini
+ExecStartPre=/bin/sh -c 'for i in $(seq 30); do pactl list short sinks | grep -q "YOUR_SINK_NAME" && exit 0; sleep 1; done; exit 0'
+```
+
+That polls for up to 30 seconds and then starts anyway, so a missing device delays
+startup rather than blocking it forever.
 
 ## 7. Multiple destinations, optional
 
@@ -227,6 +329,59 @@ A Bluetooth sink works fine as a destination. Be aware that a receiver with
 which usually prevents the speaker from powering itself off. If that bothers you,
 set it to `false` on the Bluetooth receivers only, at the cost of them taking a
 moment to wake.
+
+## Security
+
+Worth being explicit, because it is easy to miss.
+
+**Neither protocol has any authentication or encryption.** Roc and VBAN are plain
+UDP. Anything that can reach these ports can play audio out of your speakers at
+whatever volume it likes, and anyone who can capture traffic between the machines
+can reconstruct the audio.
+
+On a home LAN that is a footnote. On a shared or work network it is a real
+conversation, particularly if the hub is somewhere audio could be embarrassing.
+
+Two things worth doing:
+
+- **Scope the firewall rules to your subnet**, as in step 5, rather than opening
+  the ports to everything.
+- **Bind to one interface** instead of all of them. Every receiver accepts
+  `local.ifname`, so on a machine with more than one network you can keep this off
+  the others entirely:
+
+  ```
+  local.ifname = eno1
+  ```
+
+  The examples use `0.0.0.0` because it works everywhere without editing, not
+  because it is the best choice.
+
+Do not forward these ports through a router. There is no scenario in this design
+where the hub should be reachable from outside your network.
+
+## Uninstall
+
+```bash
+systemctl --user disable --now pipewire-audio-hub.service
+sudo rm -f /etc/pipewire/audio-hub.conf
+sudo rm -f /etc/systemd/user/pipewire-audio-hub.service
+sudo rm -f /etc/systemd/user/default.target.wants/pipewire-audio-hub.service
+rm -f ~/.config/systemd/user/default.target.wants/pipewire-audio-hub.service
+systemctl --user daemon-reload
+systemctl --user restart pipewire pipewire-pulse wireplumber
+```
+
+Optionally undo the boot setup, if you added it and want it gone:
+
+```bash
+sudo loginctl disable-linger $USER
+sudo gpasswd -d $USER audio      # only if you did not already need this
+```
+
+And remove whichever firewall rules you added. Nothing here installs packages or
+modifies PipeWire itself, so once these files are gone the machine is back to a
+stock audio setup.
 
 ## Next
 

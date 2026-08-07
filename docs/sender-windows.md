@@ -44,6 +44,27 @@ and nothing else, and send B2 out over VBAN. Because AUX feeds no physical outpu
 selecting it in Windows sends audio only to the hub, and your normal speakers stay
 untouched.
 
+## If you have more than one Windows PC
+
+Read this before step 3, because getting it wrong produces garbled audio rather
+than an error.
+
+Each Windows machine needs **its own port on the hub**, and its own `vban-recv`
+block in the hub config. The PipeWire VBAN receiver cannot separate two senders
+arriving on one port, so they interleave into noise.
+
+| Windows PC | Hub port, destination 1 | Hub port, destination 2 |
+|---|---|---|
+| first | 6980 | 6990 |
+| second | 6981 | 6991 |
+
+Everything else on each machine is identical. Set up the first PC completely, then
+repeat on the second and change only the port: in the VBAN dialog in step 3, or
+`$HubPort` in `apply-vban.ps1` if you are scripting it.
+
+Roc has no such limitation, which is why Linux and macOS senders all share one port
+and only Windows needs this.
+
 ## 1. Give A1 a real device
 
 Do this first. It is the single most common reason nothing works.
@@ -53,14 +74,22 @@ a device that actually exists. If A1 is empty or points at hardware that has sin
 been removed, the whole mixer sits idle and your VBAN stream transmits nothing,
 with no error message anywhere.
 
-This bites people who installed Voicemeeter once, months ago, on a machine whose
-audio hardware has changed since.
+The stale case is the common one. It bites people who installed Voicemeeter once,
+months ago, on a machine whose audio hardware has changed since. Voicemeeter keeps
+displaying the old name quite happily. A device name shown in **red** in the
+interface means it could not be opened.
 
 Click the **A1** button at the top right and pick any real output. It does not have
 to be one you use. Nothing is routed to A1 in this setup, so it only ever receives
 silence. A monitor's HDMI audio output is a good throwaway choice.
 
 Prefer a **WDM** entry unless you have a reason not to.
+
+If you are scripting this, run
+[`list-devices.ps1`](../scripts/windows-sender/list-devices.ps1) to print the exact
+device strings and to say whether your current A1 is valid, empty, or stale. Note
+that Voicemeeter's menu displays entries with a `WDM:` prefix but the API does not
+want it, so copy from that script rather than from the menu.
 
 ## 2. Route the AUX strip to B2 only
 
@@ -78,9 +107,9 @@ under **Outgoing Streams**:
 | Field | Value |
 |---|---|
 | On | enabled |
-| Stream Name | anything, for example `HubSpeakers` |
+| Stream Name | anything, for example `HubOutput` |
 | IP Address | the hub's address |
-| Port | the hub port for the destination you want |
+| Port | the hub port for this PC and destination, see the table above |
 | SR | must match the hub's `audio.rate` |
 | Channels | 2 |
 | Bit | 16 |
@@ -103,10 +132,14 @@ own port rather than its own stream name.
 ## 4. Rename the Windows device
 
 Windows now has a playback device called **VoiceMeeter Aux Input**. Rename it to
-something meaningful:
+something meaningful.
 
-Sound Control Panel, Playback tab, right click **VoiceMeeter Aux Input**,
-Properties, change the name, Apply.
+Press **Win+R** and run `mmsys.cpl`. That opens the classic Sound control panel
+directly on both Windows 10 and 11, which saves hunting: on Windows 11 it is buried
+under Settings, System, Sound, More sound settings.
+
+Playback tab, right click **VoiceMeeter Aux Input**, Properties, change the name,
+Apply.
 
 Now it reads like a real device, for example "Hub Speakers".
 
@@ -159,18 +192,38 @@ having saved your configuration, which is the part that is not dependable.
 
 This repo includes a script that applies the whole configuration through
 Voicemeeter's Remote API, so it does not matter whether Voicemeeter remembered
-anything. Edit the settings block at the top of
-[`apply-vban.ps1`](../scripts/windows-sender/apply-vban.ps1), then:
+anything.
+
+**Put the repo somewhere permanent first**, for example `C:\Tools\office-audio`.
+The logon task and the desktop shortcut both record the path they were installed
+from, so if you run them out of `Downloads\` and later clear it out, your autostart
+dies silently months later.
+
+Then unblock the files. Anything extracted from a downloaded zip carries the mark
+of the web, and PowerShell's default execution policy will refuse it:
 
 ```powershell
-.\scripts\windows-sender\install-task.ps1        # apply at every logon
-.\scripts\windows-sender\install-shortcut.ps1    # desktop recovery button
+cd C:\Tools\office-audio
+Get-ChildItem -Recurse | Unblock-File
 ```
 
-The first registers a logon task. The second puts a **"Start Audio Hub"** icon on
-your desktop that you can double click any time the Windows side stops working,
-including after an accidental close. It starts Voicemeeter if needed, applies
-everything, verifies it, and shows a confirmation that dismisses itself.
+Edit the settings block at the top of
+[`apply-vban.ps1`](../scripts/windows-sender/apply-vban.ps1). Use
+[`list-devices.ps1`](../scripts/windows-sender/list-devices.ps1) to get the exact
+`$A1Device` string. Then:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\windows-sender\install-task.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\windows-sender\install-shortcut.ps1
+```
+
+The first applies the config at every logon. The second creates the desktop
+recovery button.
+
+The **"Start Audio Hub"** desktop icon can be double clicked any time the Windows
+side stops working, including after an accidental close. It starts Voicemeeter if
+needed, applies everything, verifies it, and shows a confirmation that dismisses
+itself.
 
 If you use Option B, **do not also enable Voicemeeter's own "Run on Windows
 Startup"**. Voicemeeter is single instance, so the second launch just pops the
@@ -183,7 +236,7 @@ normal and by design. A typical log looks like:
 
 ```
 18:00:56  Voicemeeter not running, starting it
-18:01:05  A1 invalid ('Speakers (High Definition Audio Device)'), repointing and restarting engine
+18:01:05  A1 invalid ('Speakers (Old Sound Card)' is not an available device), repointing to 'ASUS VG247Q1A (NVIDIA High Definition Audio)' and restarting engine
 18:01:20  did not take: ip, port, sr, route, on, enable, strip.B2
 18:01:30  OK - 'HubOutput' -> 192.0.2.10:6980 sr=44100 route=4
 ```
@@ -217,25 +270,22 @@ to discover, and all of them fail silently.
 The `route` parameter on an outgoing stream selects the source bus by index. For
 Banana the buses are A1, A2, A3, B1, B2, so B2 is `4`.
 
-### Remote API notes
+## Uninstall
 
-Anyone extending the script should know these. All four cost real debugging time to
-discover.
+```powershell
+Unregister-ScheduledTask -TaskName "OfficeAudioHub" -Confirm:$false
+Remove-Item (Join-Path ([Environment]::GetFolderPath('Desktop')) "Start Audio Hub.lnk")
+Remove-Item "$env:LOCALAPPDATA\office-audio" -Recurse
+```
 
-- **Drain the dirty flag before setting anything.** After `VBVMR_Login()` you must
-  poll `VBVMR_IsParametersDirty()` until it returns 0. Set calls made before that
-  return success and silently do nothing.
-- **The API only works from the interactive session.** It communicates through
-  session scoped shared memory, so a script run from a service context cannot see a
-  Voicemeeter running on the desktop. `VBVMR_Login()` returns 1 instead of 0 when
-  this is the problem.
-- **`vban.outstream[N].sr` cannot be changed while the stream is on.** Set `.on` to
-  0, change the rate, then set `.on` back to 1.
-- **`Command.Shutdown` returns success without closing the application.** Do not
-  rely on it to trigger a settings save.
+Then in Voicemeeter, set the VBAN outgoing stream back to off, or just uninstall
+Voicemeeter entirely from Settings, Apps.
 
-The `route` parameter on an outgoing stream selects the source bus by index. For
-Banana the buses are A1, A2, A3, B1, B2, so B2 is `4`.
+Two things to know if you uninstall Voicemeeter: it needs a reboot to fully remove
+its virtual sound cards, and if you renamed the device in step 4 that rename is
+stored per device in Windows, so it disappears with the device. If you had set
+"VoiceMeeter Aux Input" as your default output, set your real output back first,
+otherwise Windows picks one for you and it may not be the one you want.
 
 ## Next
 
