@@ -1,0 +1,31 @@
+[Unit]
+Description=Bluetooth pairing agent (headless)
+#
+# BlueZ needs an "agent" registered to authorise incoming connections. Without
+# one, bluetoothd logs:
+#   Authentication attempt without agent
+#   a2dp.c:auth_cb() Access denied: org.bluez.Error.Rejected
+# and every connection is refused, even from an already-paired, trusted device.
+#
+# A desktop session normally supplies this, which is a trap: it works while you
+# are logged in, then silently stops the moment bluetoothd restarts or the
+# machine goes headless. This is a system service so it survives both.
+#
+# NoInputNoOutput accepts pairing without a confirmation prompt, because a
+# headless machine has no way to show one. Combined with leaving the adapter
+# discoverable, anything in range can attempt to pair. On a home network that is
+# usually acceptable; if not, keep the adapter non-discoverable and only enable
+# discovery while pairing something new.
+#
+# Requires: sudo apt install bluez-tools
+After=bluetooth.service
+Requires=bluetooth.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/bt-agent --capability=NoInputNoOutput
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,36 @@
+-- Make this machine act as a Bluetooth SPEAKER: phones connect to it and send
+-- it audio. Install to /etc/wireplumber/bluetooth.lua.d/ (NOT ~/.config, which
+-- is unreadable before login on a machine with an encrypted home).
+--
+-- WirePlumber 0.4 syntax. 0.5 uses .conf files instead.
+--
+-- roles = [ a2dp_sink ] ONLY.
+-- Adding a2dp_source looks correct, since the phone IS a source, and it breaks
+-- everything: the phone still connects but no audio node is ever created.
+--
+-- HFP/HSP OFF. Offering the Hands-Free roles makes connections come up and
+-- instantly drop ("Connected" flicking back to "Saved" on Android), with
+-- bluetoothd logging:
+--   Unable to get io data for Hands-Free unit: getpeername:
+--   Transport endpoint is not connected (107)
+-- A failed HFP negotiation tears down the whole link, taking A2DP with it.
+bluez_monitor.properties["bluez5.roles"] = "[ a2dp_sink ]"
+bluez_monitor.properties["bluez5.hfphsp-backend"] = "none"
+
+-- Route incoming Bluetooth audio to a specific sink. Without this it lands on
+-- whatever the default sink happens to be; the Bluetooth alias is only a name
+-- and carries no routing meaning.
+--
+-- This is enough for ONE adapter. With two or more adapters feeding different
+-- outputs, a rule cannot tell them apart: nothing on the node identifies the
+-- adapter, and a device-level match does not propagate target.object to the
+-- node. Use bt-audio-router.py instead.
+table.insert(bluez_monitor.rules, {
+  matches = {
+    { { "node.name", "matches", "bluez_input.*" } },
+  },
+  apply_properties = {
+    ["target.object"] = "REPLACE_WITH_YOUR_SINK_NAME",
+    ["node.description"] = "Phone (Bluetooth)",
+  },
+})

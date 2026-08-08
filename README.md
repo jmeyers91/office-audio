@@ -37,6 +37,8 @@ delay does not matter.
                    ├─────────────────────▶│   Linux hub     │──▶ headphones,
    Windows PC 1  ──┤  VBAN, port 6980     │   (PipeWire)    │    speakers, or
    Windows PC 2  ──┘  VBAN, port 6981     └─────────────────┘    USB interface
+                                                   ▲
+   phone  ─────────────────────────────────────────┘  Bluetooth A2DP
 ```
 
 Note the two Windows ports. Roc senders share one port and are mixed
@@ -44,9 +46,10 @@ automatically, but each VBAN sender needs its own or they interleave into noise.
 
 The hub runs PipeWire with several network receiver modules loaded at once. Each
 receiver shows up as an ordinary audio stream, so everything mixes automatically
-and you get per source volume control.
+and you get per source volume control. A phone connecting over Bluetooth arrives
+the same way and mixes alongside the network senders.
 
-There is no single protocol that covers every sender, so this setup uses two.
+There is no single protocol that covers every sender, so this setup uses three.
 
 ### The tools involved
 
@@ -74,11 +77,16 @@ Since Roc has no Windows support, this is how Windows machines reach the hub.
 
 ### Which protocol goes with which sender
 
-| Sender OS | Protocol | What you install | Has to keep running |
+| Sender | Protocol | What you install | Has to keep running |
 |---|---|---|---|
 | Linux | Roc | nothing, PipeWire has the module | no |
 | macOS | Roc | roc-vad | no |
 | Windows | VBAN | Voicemeeter | yes |
+| Phone | Bluetooth | nothing at all | no |
+
+A phone is the odd one out: it connects to the hub as if it were a Bluetooth
+speaker, so it needs no app. That also means it works with apps that block audio
+capture, which rules out the Android Roc app for most real use.
 
 The hub speaks both at the same time, so you can mix and match freely.
 
@@ -110,7 +118,8 @@ Start with the hub, then add whichever senders you need. Each guide stands alone
    anything more fiddly
 3. **[macOS sender](docs/sender-macos.md)**
 4. **[Windows sender](docs/sender-windows.md)**, the most involved of the three
-5. **[Troubleshooting](docs/troubleshooting.md)** if something is silent
+5. **[Phone over Bluetooth](docs/sender-phone-bluetooth.md)**, needs no app at all
+6. **[Troubleshooting](docs/troubleshooting.md)** if something is silent
 
 ### When you are done
 
@@ -197,6 +206,8 @@ wondering why a video has no sound.
 - **Linux sender**: a laptop running the same Linux Mint 22.3 and PipeWire 1.0.5
   as the hub, over Wi-Fi.
 - **macOS sender**: Apple Silicon, macOS 26, roc-vad 0.0.4.
+- **Phone**: Android 15 over Bluetooth A2DP, using two USB/M.2 adapters so the
+  phone sees two separate devices.
 - **Windows sender**: Windows 10 22H2, Voicemeeter Banana 2.0.6.8. Windows 11 is
   untested. Nothing here is version specific and it should work unchanged, but the
   classic Sound control panel is buried deeper, so the guide uses `mmsys.cpl`.
@@ -209,7 +220,7 @@ behaves differently.
 
 ```
 docs/                     setup guides, one per role
-scripts/linux-hub/        PipeWire client config and systemd unit
+scripts/linux-hub/        PipeWire client config, systemd units, Bluetooth
 scripts/linux-sender/     PipeWire sender config
 scripts/macos-sender/     roc-vad device setup
 scripts/windows-sender/   Voicemeeter VBAN config and logon task

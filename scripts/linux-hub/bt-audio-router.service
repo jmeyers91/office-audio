@@ -1,0 +1,17 @@
+[Unit]
+Description=Route Bluetooth audio to a sink based on which adapter it arrived on
+# Must be a USER service: it talks to PipeWire, which is per-user and
+# session-scoped. Install to /etc/systemd/user rather than ~/.config so it still
+# works on a machine with an encrypted home, where ~ is unreadable before login.
+After=pipewire.service pipewire-pulse.service wireplumber.service
+Wants=pipewire-pulse.service wireplumber.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/bin/bt-audio-router.py
+Restart=always
+RestartSec=5
+Slice=session.slice
+
+[Install]
+WantedBy=default.target
