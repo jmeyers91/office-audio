@@ -282,29 +282,75 @@ pw-link -l | grep -A1 '^hub-'          # this is the real test
 The ports bind even when the receiver never linked to a sink, so a port check alone
 will happily report success on a hub that produces no sound.
 
-### If it comes up dead after a cold boot
+### If it comes up dead, or misrouted, after a cold boot
 
 `After=wireplumber.service` orders startup but does not guarantee your sink
-**exists** by the time the receivers start. A USB audio interface enumerating during
-boot can easily lose that race, and the result is the same "no target node
-available" failure the client context design exists to avoid. `Restart=always` does
-not help, because with `nofail` the process stays alive with a dead stream.
+**exists** by the time the receivers start. Any device that enumerates late can lose
+that race, and it is not only USB: an onboard codec can appear after a USB
+interface that was already attached at power-on. There are two possible outcomes,
+and the second is much harder to spot than the first.
 
-If that happens, the immediate fix is:
+**Dead.** The receiver fails with "no target node available", which is the failure
+the client context design exists to avoid. `Restart=always` does not help, because
+with `nofail` the process stays alive with a dead stream.
+
+**Misrouted.** The receiver links to the **default sink** instead and never moves
+back. This happens when *some* sink exists but the pinned one does not, and it is
+silent: the service is `active`, the ports are bound, the receivers are healthy,
+and the audio comes out of the wrong hardware. Nothing is logged at the shipped
+`log.level`.
+
+With one destination you will never notice the second case, because the only
+pinned sink is usually the default sink too, so falling back changes nothing. It
+surfaces the day you add a second destination, and then it affects every sender at
+once. See
+[troubleshooting.md](troubleshooting.md#one-destination-plays-out-of-another-destinations-hardware).
+
+Either way the immediate fix is:
 
 ```bash
 systemctl --user restart pipewire-audio-hub
 ```
 
-To make it stick, have the unit wait for the sink before starting. Add to
-`/etc/systemd/user/pipewire-audio-hub.service`:
+To make it stick, have the unit wait for the sinks before starting. Install
+[`wait-for-sinks.sh`](../scripts/linux-hub/wait-for-sinks.sh) and its drop-in:
 
-```ini
-ExecStartPre=/bin/sh -c 'for i in $(seq 30); do pactl list short sinks | grep -q "YOUR_SINK_NAME" && exit 0; sleep 1; done; exit 0'
+```bash
+sudo install -m 0755 scripts/linux-hub/wait-for-sinks.sh \
+     /usr/local/bin/audio-hub-wait-for-sinks
+sudo mkdir -p /etc/systemd/user/pipewire-audio-hub.service.d
+sudo install -m 0644 scripts/linux-hub/wait-for-sinks.conf.example \
+     /etc/systemd/user/pipewire-audio-hub.service.d/wait-for-sinks.conf
+systemctl --user daemon-reload
 ```
 
-That polls for up to 30 seconds and then starts anyway, so a missing device delays
-startup rather than blocking it forever.
+It reads the sink names out of your `target.object` lines, so it does not need
+editing and cannot drift when you add a destination. It waits for **all** of them,
+then starts anyway after 30 seconds rather than blocking forever, logging loudly if
+a sink never appeared. Raising that past about 80 seconds needs `TimeoutStartSec=`
+on the unit too, or systemd kills the start instead.
+
+Three limits worth knowing before you rely on it:
+
+- It skips `bluez_output.*` targets and the shipped `REPLACE_WITH_*` placeholders.
+  A Bluetooth speaker's sink does not exist until the speaker is connected, so
+  waiting for one would stall every boot and then report a fault that is not real.
+- It checks a sink is **present**, which is weaker than linkable. A sink is listed
+  while suspended and while all its ports report "not available", and a fallback is
+  still possible in those states. It covers the common race, not every case.
+- If you also use `force-output-port.service.example`, the two run in sequence and
+  their waits add up.
+
+Verify by rebooting and checking the journal:
+
+```bash
+journalctl --user -u pipewire-audio-hub -b | grep 'pinned target sinks'
+pw-link -l | grep -A1 '^hub-'
+```
+
+A boot that reports `present after 0s` tells you the sinks were ready anyway; it
+does not exercise the guard. The case it exists for is the boot where that number
+is non-zero, or where the warning appears.
 
 ## 7. Multiple destinations, optional
 

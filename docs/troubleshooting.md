@@ -69,7 +69,15 @@ which vary between versions. If that returns nothing you cannot tell whether the
 plumbing is broken or your grep is wrong.
 
 Each receiver should be linked to the sink you expect. If it is linked to the wrong
-one, `target.object` is missing or has the wrong node name.
+one, there are two possibilities, and the next check tells them apart:
+
+```bash
+pactl list short sinks | cut -f2 | grep -qxF 'THE_NAME_FROM_YOUR_CONFIG' && echo present
+```
+
+If the name is **absent**, `target.object` is missing or misspelled. If it is
+**present**, the config is right and the pin was never resolved at start; see
+[One destination plays out of another destination's hardware](#one-destination-plays-out-of-another-destinations-hardware).
 
 ## Common causes
 
@@ -190,10 +198,72 @@ pactl list sinks | grep -E 'Active Port|Mute:'
 If audio is reaching the sink and the port is unmuted, the fault is downstream of
 the computer.
 
+### One destination plays out of another destination's hardware
+
+Symptom: a destination comes out of the wrong **device** entirely, and does so for
+every sender at once. On a two destination hub, "speakers" arrives at the
+headphones, or the reverse.
+
+Suspect the hub, not the senders. Windows senders use VBAN and macOS senders use
+Roc, so if both are wrong in the same way, the only shared element is the hub.
+
+The mechanism is a `target.object` pin that was never resolved. If a receiver
+starts while its pinned sink does not exist, the session manager falls back to
+the **default sink** and never moves the stream back. The receivers are healthy,
+the ports are bound, the service is `active`, and the audio is simply going
+somewhere else. Nothing is logged at the shipped `log.level`.
+
+Establish it in three steps. First, what the config asks for against what is
+actually linked:
+
+```bash
+# what the config pins
+grep -E 'node.name|target.object' /etc/pipewire/audio-hub.conf
+
+# what is actually linked
+pw-link -l | grep -A1 '^hub-'
+```
+
+Second — and this is the step that distinguishes a fallback from a simple typo —
+check the pinned name exists right now:
+
+```bash
+pactl list short sinks
+```
+
+If the pinned name is **absent**, you have a bad name, not a fallback. If it is
+**present** while the link points elsewhere, that is the fallback.
+
+A suspended sink corroborates it: a sink nothing is routed to sits `SUSPENDED`,
+so a destination that should be playing while its sink is suspended is consistent
+with the audio going elsewhere. Consistent, not conclusive — a sink is also
+suspended when the sender simply is not transmitting.
+
+The immediate fix is to restart the hub once the devices are all present:
+
+```bash
+systemctl --user restart pipewire-audio-hub
+```
+
+**A single destination hub cannot show you this.** When the only pinned sink is
+also the default sink, a receiver that fell back looks identical to one that was
+pinned correctly, because both end up in the same place. The fault stays
+invisible until a second destination exists, and then it affects everything at
+once. Do not conclude a receiver is pinned correctly just because it sounds
+right; check the link.
+
+To stop it recurring at boot, see
+[`wait-for-sinks.sh`](../scripts/linux-hub/wait-for-sinks.sh), which holds the
+receivers until every pinned sink exists and says so in the journal when one
+never turns up.
+
 ### Audio plays, but out of the wrong physical output
 
 Symptom: everything arrives at the hub correctly, but comes out an internal
 chassis speaker or the wrong jack, and moving the cable does not help.
+
+Different from the previous entry: there the audio went to the wrong **sink**,
+here it reaches the right sink and leaves by the wrong **port**.
 
 This is port selection, not routing. Check which port the sink is using:
 

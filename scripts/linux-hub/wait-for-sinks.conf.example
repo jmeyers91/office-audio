@@ -1,0 +1,31 @@
+# Do not start the receivers until the sinks they are pinned to exist.
+#
+# Install to:
+#   /etc/systemd/user/pipewire-audio-hub.service.d/wait-for-sinks.conf
+# then `systemctl --user daemon-reload`.
+#
+# See wait-for-sinks.sh for the full reasoning. Short version: a receiver that
+# starts before its target sink exists silently falls back to the default sink
+# and stays there, so a destination plays out of the wrong hardware with
+# nothing in the log to say why.
+#
+# A drop-in rather than an edit to the unit, so the unit stays as shipped and
+# this is removable in one step:
+#   sudo rm -r /etc/systemd/user/pipewire-audio-hub.service.d
+#   systemctl --user daemon-reload
+#
+# The [Unit] keys are here because the script calls pactl, which talks to
+# pipewire-pulse. The hub unit itself does not order after it, since nothing
+# else in it needs pactl. Both keys accumulate in a drop-in rather than
+# replacing what the unit already declares.
+#
+# ExecStartPre also accumulates. The hub unit ships without one, so there is
+# nothing to clobber; if you add another, note that they run in order and their
+# durations add up against TimeoutStartSec (90s by default).
+
+[Unit]
+After=pipewire-pulse.service
+Wants=pipewire-pulse.service
+
+[Service]
+ExecStartPre=/usr/local/bin/audio-hub-wait-for-sinks
